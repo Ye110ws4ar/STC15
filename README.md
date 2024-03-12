@@ -356,5 +356,87 @@ system.h一共由四个主要部分构成，分别是**声明**、**设置数据
  三行按键对应输出表：
  ![矩阵键盘三行按键法](https://github.com/Ye110ws4ar/STC15/blob/main/threeline.png)   
    
+### 5.利用onewire协议里的DS18B20进行温度读取
+从这一章节开始很多函数的书写需要借助比赛时官方提供的**底层驱动代码参考**进行改写，篇幅较长所以完整代码我会使用链接的方式提供。
+**onewire.h**:
+
+    #include "system.h"
+    float fRead_Temperature(void);
+**onewire.c**:
+[onewire.c完整](https://github.com/Ye110ws4ar/STC15/pull/1/files#diff-817bd94e15c99c552d6f8c3f48a02a113546a3eefff1dd7b8e2867fcfca70fb6)<br>重要的说在前面，因为官方提供的是1T模式下的代码，我们需要通过在`Delay_OneWire`函数里写上`t=t*12;`!!!有且只有这个芯片需要如此操作。
+<br>借助提供的官方代码，在比赛时我们自己要书写的部分是DS18B20温度的最后读取，在书写之前我们要知道几个芯片的重要控制字：
+* 0xcc使芯片跳过读取ROM
+* 0x44使芯片启动温度转换
+* 0xbe使芯片获取暂存器数据
+
+<br>在此基础上我们读取温度的思路是：
+
+ 1. 初始化
+ 2. 跳过读取ROM
+ 3. 启动温度转换
+ 4. 初始化
+ 5. 跳过读取ROM
+ 6. 获取暂存器数据
+ 7. 表示温度（温度的分辨率是0.0625）
+
+<br>于是我们有如下的代码：
+
+    float fRead_Temperature()
+    {
+	    float temp_return;
+	    u8 low,high;
+	    init_ds18b20();
+	    Write_DS18B20(0xcc);
+	    Write_DS18B20(0x44);
+	    init_ds18b20();
+	    Write_DS18B20(0xcc);
+	    Write_DS18B20(0xbe);
+	    low=Read_DS18B20();
+	    high=Read_DS18B20();
+	    temp_return=(high<<8|low)*0.0625;
+	    return temp_return;
+    }
 
 	
+	
+### 6.利用ds1302芯片进行时间读取与设置
+[ds1302.c完整代码](https://github.com/Ye110ws4ar/STC15/pull/1/files#diff-5789f50b69f26a6e1cb12172824d308b0ea87c54e375291c61af183b10f76e52)
+<br> ds1302是一个很厉害的芯片，可以在芯片资料里的table3找到读写各类参数的八进制数，我在此摘抄如下：
+|类型  | 读 |写|
+|--|--|--|
+| 秒 | 81 |80|
+| 分 | 83 |82|
+| 时 | 85 |84|
+| 日期 | 87 |86|
+| 月 | 89 |88|
+| 星期 | 8B |8A|
+| 年 | 8D |8C|
+<br>我们不难看出读数据都是奇数，写数据都是偶数，此外比较有趣的是`时`的bit7位在低电平时是24h，高电平是12h。
+<br>此外我们要知道的一点是ds1302用**BCD码**来存储数据，什么是BCD码呢，就是用**四位二进制数**表示**一位十进制数**，比如十进制的25转为BCD就是0010,0101，而二进制的0010,0101也就是十进制里的37，所以我们记住一个案例，即十进制（Dec）的25转化为BCD就变为了37，通过这个案例我们写下BCD与Dec相互转换的方程并写入头文件中：
+**ds1302.h**:
+
+    #include "system.h"
+    #define DecToBCD(dec) (dec/10*16)+(dec%10)
+    #define BCDToDec(bcd) (bcd/16*10)+(bcd%16)
+    unsigned char Read_Ds1302_Byte(unsigned char address);
+    void vClock_Set(u8 hour,u8 minute,u8 second);
+在书写头文件中的自己写的部分时我们还要知道一个知识点就是ds1302的写保护，默认情况下写保护是开启的，但是在设置时间时要暂时关闭，我们在头文件中如下书写：
+**ds1302.c**:
+
+    void vClock_Set(u8 hour,u8 minute,u8 second)
+    {
+	    Write_Ds1302_Byte(0x8e,0x00);//关闭写保护
+	    Write_Ds1302_Byte(0x80,DecToBCD(second));
+	    Write_Ds1302_Byte(0x82,DecToBCD(minute));
+	    Write_Ds1302_Byte(0x84,DecToBCD(hour));
+	    Write_Ds1302_Byte(0x8e,0x80);//打开写保护
+    }
+而在进行时间读取时，我们进行如下书写：
+
+    u8 hour,minute,second;
+    void vDS1302_Process()
+    {
+	    second=BCDToDec(Read_Ds1302_Byte(0x81));
+	    minute=BCDToDec(Read_Ds1302_Byte(0x83));
+	    hour=BCDToDec(Read_Ds1302_Byte(0x85));
+    }
