@@ -245,7 +245,7 @@ system.h一共由四个主要部分构成，分别是**声明**、**设置数据
     void vBTN_Read_ThreeLine()
     {
 	    u8 ReadData = P3^0xff;
-	    Trg_BTN = ReadData&(ReadData^Cont_BTN);//^代表异或操作
+	    Trg_BTN = ReadData&(ReadData^Cont_BTN);//^代表异或操作，相同为0，不同为1
 	    Cont_BTN = ReadData;
     }
 三行按键法的优势在于行数更少而且可以进行长按检测，并且我们知道按键在键盘中对应的控制的字节如下：<br>![单片机中矩阵键盘](https://github.com/Ye110ws4ar/STC15/blob/main/kbd.png)
