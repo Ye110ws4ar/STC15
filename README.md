@@ -442,3 +442,129 @@ system.h一共由四个主要部分构成，分别是**声明**、**设置数据
 	    minute=BCDToDec(Read_Ds1302_Byte(0x83));
 	    hour=BCDToDec(Read_Ds1302_Byte(0x85));
     }
+### 7.利用IIC协议进行读写EEPROM与ADC、DAC
+[iic.c完整代码](https://github.com/Ye110ws4ar/STC15/pull/1/files#diff-5d6dc31d1dc775ea5539ff7cf3b80adb7579a97d6d4b639043e0ceb53b3708aa)
+#### EEPROM：
+实现EEPROM读写的是芯片AT24C02，而iic中该器件的控制字的顺序如下：<br>1 0 1 0 A~2~ A~1~ A~0~ R/W，其中A~2~到A~0~用于确定器件的地址，最后一位确定对器件执行的是读还是写，由于对于AT24C02芯片来说A~2~到A~0~都是0，所以0xa0关键字是对EEPROM进行写操作，0xa1关键字是对EEPROM进行读操作，再结合EEPROM的图示，即下图：
+![写入EEPROM](https://github.com/Ye110ws4ar/STC15/blob/main/eepromwrite.drawio.png)
+![读取EEPROM](https://github.com/Ye110ws4ar/STC15/blob/main/eepromread.drawio.png)
+~对于ack来说，0为有，1为无~
+<br>所以我们能结合上面的图片写出如下的EEPROM操作函数：
+**iic.h**:
+
+    #include "system.h"
+    void vWrite_EEPROM(u8 add,u8 dat)；
+    u8 ucRead_EEPROM(u8 add);
+**iic.c**:
+
+    #include "iic.h"
+    void vWrite_EEPROM(u8 add,u8 dat)
+    {
+	    IIC_Start();
+	    IIC_SendByte(0xa0);
+	    IIC_WaitAck();
+	    IIC_SendByte(add);
+	    IIC_WaitAck();
+	    IIC_SendByte(dat);
+	    IIC_WaitAck();
+	    IIC_Stop();
+	    vDelay_Ms(5);
+    }
+    u8 ucRead_EEPROM(u8 add)
+    {
+	    u8 dat;
+	    IIC_Start();
+	    IIC_SendByte(0xa1);
+	    IIC_WaitAck();
+	    dat=IIC_RecByte();
+	    IIC_SendAck(1);
+	    IIC_Stop();
+	    return dat;
+    }
+关于写入EEPROM的地址范围则是0x00~0xff都可以，此外要注意在写入EEPROM时有独有的**延时5ms**。
+#### ADC与DAC：
+在单片机中进行AD与DA的是芯片PCF8591，与上文类似，该器件也有独特的地址，其为1001 000 R/非W，所以**写入0x90时表示向8591写入数据，写入0x91的时候表示从8591读数据**，而在进行ADC读取数字信号的时候又分为三个不同的端口，分别是**AIN0、AIN1、AIN3**，其中AIN1由一个**光敏电阻**控制的**分压电路**控制，在光线暗时AIN1口的电压较低，在光线亮的时候AIN1口的电压较高；AIN0在J3的18引脚上，可以输出信号；AIN3由一个**滑动变压器**控制，通过旋转控制不同的电压大小。
+<br> 同时的，与EEPROM一样，在书写ADC与DAC的函数时我们也需要借助芯片手册里的图片，我在此简化如下：
+![读取数据，即ADC](https://github.com/Ye110ws4ar/STC15/blob/main/ADC.png)
+![写入数据，即DAC](https://github.com/Ye110ws4ar/STC15/blob/main/DAC.png)
+<br>由此我们下面开始书写头文件与函数：
+**iic.h**:
+
+    #include "system.h"
+    u8 ucRead_ADC(u8 ctrl_byte);
+    void vWrite_DAC(u8 dat);
+**iic.c**:
+
+    #include "iic.h"
+    u8 ucRead_ADC(u8 ctrl_byte)
+    {
+	    u8 adc_val;
+	    IIC_Start();
+	    IIC_SendByte(0x90);
+	    IIC_WaitAck();
+	    IIC_SendByte(ctrl_byte);
+	    IIC_WaitAck();
+	    
+	    IIC_Start();
+	    IIC_SendByte(0x91);
+	    IIC_WaitAck();
+	    adc_val=IIC_RecByte();
+	    IIC_SenAck(1);
+	    IIC_Stop();
+	    return adc_val;
+    }
+    void vWrite_DAC(u8 dat)
+    {
+	    IIC_Start();
+	    IIC_SendByte(0x90);
+	    IIC_WaitAck();
+	    IIC_SendByte(0x40);
+	    IIC_WaitAck();
+	    IIC_SendByte(dat);
+	    IIC_WaitAck();
+	    IIC_Stop();
+    }
+在实际编程时，ADC常用且需要注意的点很多，首先是ADC时输入的ctrl_byte，在为0x40时通AIN0，在0x41时通AIN1，在0x43时通AIN3，此外由于进行一次ADC要耗时0.75ms，所以在运行时不能太频繁，我们需要利用定时器中断**10ms读取一次**。
+<br>而在处理实际问题时，我们经常要对于不同的情况对读到的数据做调整，变换不同的范围，比如我们假设ch3为读到的ADC结果，则有：
+
+    u16 ch3_volt;u8 ch3_0_99,ch3_1_5;
+    ch3_volt=ch3*100/51;//加小数点后范围变为0~5.00
+    ch3_0_99=ch3/2.57f;//变为0~99
+    ch3_1_5=ch3/51.1f+1;//变为1~5
+一些话说在最后，是关于如何记忆IIC相关的这四个函数的，比如写EEPROM，实际上就三件事，告诉芯片我要写入了，写个地址，写个数据，结束；而读EEPROM就是告诉芯片我要读了，然后读走数据回复个no ack，除此之外每一小步完成都要等待ack；写8591，实际上就是DAC，也很简单，告诉芯片我要DAC，也就是写数据了，然后选择AIN0口输出，输入数据大小结束；最难的是ADC，明明是读数据却要先从写入数据开始，所以是先开始，然后告诉芯片我要写入了，然后写入一个想ADC的地址，之后重新开始，告诉芯片我要读数据了，读走数据后再回复个no ack，再结束。
+### 8.NE555芯片进行频率测量
+频率测量实际上很简单，没有听起来那么的难，实际上就是一个计时器的事情，计时器在一秒内读到了多少次电平变化就是多少频率了，而在NE555中我们用的是计时器0对P34进行计数，具体配置方法在手册中有如下图片：
+![TMOD的位构成](https://github.com/Ye110ws4ar/STC15/blob/main/TMOD-1.jpg)
+![关键位1](https://github.com/Ye110ws4ar/STC15/blob/main/TMOD-2.jpg)
+![关键位2](https://github.com/Ye110ws4ar/STC15/blob/main/TMOD-3.jpg)
+<br>根据需求，我们选择16位不可自动重装载模式的计数器0，所以TMOD应该初始化为0x05;同时我们已经分析过频率测量只要读取1s后计数器数值即可，所以我们写出如下代码：
+**NE555.h**:
+
+    #include "system.h"
+    extern u16 freq_ne555;
+    void vCounter0_Init();
+    void vNE555_Process();
+**NE555.c**:
+
+    #include "NE555.h"
+    void vCounter0_Init()
+    {
+	    TMOD  |= 0x05;
+	    TL0=0x00;
+	    TH0=0x00;
+	    TR0=1;
+    }
+    u16 cnt_ne555;
+    u16 freq_ne555;
+    void vNE555_Process()
+    {
+	    cnt_ne555++;
+	    if(cnt_ne555>=1000)
+	    {
+		    cnt_ne555=0;
+		    freq_ne555=(Th0<<8)|TL0;
+		    TH0=0;
+		    TL0=0;
+	    }
+    }
+或者在处理实际问题时跟据不同的更新时长要求对上述函数进行修改。
