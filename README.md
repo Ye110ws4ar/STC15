@@ -127,6 +127,122 @@ system.h一共由四个主要部分构成，分别是**声明**、**设置数据
 <br>那我们可以一行一行地看一看大体配置的思路是什么样的，首先AUXR &= 0xFB，那么我们就可以知道T2R=1，T2_C/非T=0，T2x12=1，那么就是说允许了定时器2的运行，且设置为定时器模式，而且不分频，就是12T模式。到这里相当于对定时器的最初工作模式进行了限定，再对T2L与T2H进行赋值后限定中断的时间，并且开启中断，实现定时中断的功能。<br>
 当然我们在实际书写的时候并不会真的自己配置，我们会在STC-ISP中的定时器计算器输入参数就有对应的代码生成，需要注意的是在软件中生成的没有最后两行的开启定时器中断与开启总中断，需要在范例程序的**定时器配置：定时器2的16位自动重载**中找到对应代码复制粘贴加上去。同时注意选择12MHz的模式。
 
+### 4.用串口进行通讯\*
+串口通讯是省赛几乎不考，只有国赛才会考到的一个功能，所以我把它放在最后进行讲解。我们先介绍串口的基础知识：
+<br>P30管脚是单片机的串口接收管脚，即电脑向单片机发送信息；P31管脚是单片机的串口发送管脚，即单片机向电脑发送信息。由此我们不难发现按键会影响串口的发送（尤其是最上面两行）。
+<br>而串口的控制字中有两个很重要的标志位，分别是**TI**与**RI**。TI是**发送**中断请求标志位，在停止位开始发送时由内部硬件置位，即TI=1，响应中断后TI必须用软件清零。RI是**接收**中断请求标志位，串行接收到停止位的中间时刻由内部硬件置位，即RI=1，向CPU发中断申请，响应中断后RI必须由软件清零。这在书写串口中断函数有大用。
+<br>于是我们有如下串口接收固定长度数据的思路：
+
+ 1. 在串口中断服务函数里测试串口接收是否成功：SBUF=SBUF
+ 2. 定义rx_buf为串口接收缓存数组，rx_cnt为接收计数变量，rx_flag为接收完成标志位
+ 3. 在串口标志位判断里，将SBUF的一个字节数据赋值给rx_buf数组，rx_buf[rx_cnt++]=SBUF
+ 4. 判断rx_cnt的值，如果接受到固定长度的数据则置位rx_flag
+ 5. 在while(1)里处理rx_buf数组
+ <br>但是由于有可能用户没有使用正确长度的数据导致程序错误，所以我们考虑到电脑端发送的连续两个字节之间的间隔小于50ms，可以通过如下方式实现对以上bug的修复：<br>
+ 1. 在定时器2中断里对串口接收的空闲时间开始计时，如果到50ms，则清空rx_buf和rx_cnt
+ 2. 在串口接收服务函数里，重置串口接收空闲计时
+ <br>在书写串口相关的函数时我们两次利用了STC-ISP，分别是波特率计算器（**12MHz 4800波特率 1T模式**）以及STC-ISP范例程序中**使用定时器1的16位重装载**
+ 而上诉范例程序我引用至此：[范例程序](%E5%AE%9A%E6%97%B6%E5%99%A81%E7%94%A8%E4%BD%9C%E4%B8%B2%E5%8F%A31%E7%9A%84%E6%B3%A2%E7%89%B9%E7%8E%87.c)
+ 接下来我们来看串口函数的头文件以及c文件怎么写：
+ **Uart.h**：
+ ```
+ #include "system.h"
+#define RXBUF_NUM 3
+extern u8 rx_buf[RXBUF_NUM];
+extern bit rx_flag;
+void Uart_Init(void);
+void SendData(u8 dat);
+void SendString(char *s);
+void vRxIdle_Process(void); 
+ ```
+ 而主函数部分就可以细分为很多部分，首先是串口的初始化：
+ ```
+ #include "Uart.h"
+ void Uart_Init()
+ {
+	 SCON = 0x50;
+	 AUXR |= 0x40;
+	 AUXR &= 0xFE;
+	 TMOD &= 0x0F;
+	 TL1 = 0x8F;
+	 TH1 = 0xFD;
+	 ET1 = 0;
+	 TR1 = 1;
+	 ES = 1;
+	 EA = 1;//最后两行要自己加上
+ }
+ ```
+然后是串口的中断函数，相较于范例程序有很多改动，但还是往简单改：
+```
+bit busy;
+u8 rx_buf[RXBUF_NUM];
+u8 rx_cnt=0;
+bit rx_flag;
+u8 rx_idletime=0;
+void Uart() interrupt 4
+{
+	if(RI)
+	{
+	RI=0;
+	rx_idletime=0;
+	rx_buf[rx_cnt++]=SBUF;
+	if(rx_cnt==3)
+	{
+		rx_cnt=0;
+		rx_flag=1;
+	}
+	}
+	if(TI)
+	{
+		TI=0;
+		busy=0;
+	}
+} 
+ ```
+ 接下来是放在Timer2的ISR里的用来消除bug的函数，由于其中用到了memset函数所以要在system.h中包含string.h，代码如下：
+ ```
+void vRxIdle_Process()
+{
+	rx_idletime++;
+	if(rx_idletime>=50)
+	{
+		rx_idletime=0;
+		rx_cnt=0;
+		memset(rx_buf,'\0',sizeof(rx_buf));
+	}
+}
+ ```
+ 然后分别是发送数据与字符串的函数：
+ ```
+ void SendData(u8 dat)
+ {
+	 while(busy);
+	 busy=1;
+	 SBUF=dat;
+ }
+ void SendString(char *s)
+ {
+	 while(*s)
+	 {
+		 SendData(*s++);
+	 }
+ }
+ ```
+ 而在实际应用中，我们假设我们需要把串口接收到的数据第一个用于控制LED，第二个用于控制继电器，我们需要把如下函数放在while(1)里：
+ ```
+void vUartRx_Process()
+{
+	if(rx_flag)
+	{
+		rx_flag=0;
+		vDevice_Ctrl(0x80,rx_buf[0]);
+		vDevice_Ctrl(0x80,rxbuf[1]);
+	}
+} 
+ ```
+ 且在初始化时不仅把串口初始化了，初始化后还要加上Delay50毫秒，并且不要忘了在中断服务函数加上`vRxIdle_Process()`实现消除bug。
+ 
+
 ## 外设代码
 ### 1. 对P27~P25以及P0赋值
 **Device.h**:
