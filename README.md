@@ -236,7 +236,7 @@ void vUartRx_Process()
 	{
 		rx_flag=0;
 		vDevice_Ctrl(0x80,rx_buf[0]);
-		vDevice_Ctrl(0x80,rxbuf[1]);
+		vDevice_Ctrl(0x80,rx_buf[1]);
 	}
 } 
  ```
