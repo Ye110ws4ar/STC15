@@ -467,7 +467,7 @@ void vUartRx_Process()
     {
 	    u8 ReadData=ucKBD_KeyIO_ThreeLine()^0xff;
 	    Trg_KBD=ReadData&(ReadData^ContKBD);
-	    ContKBD=ReadData;
+	    Cont_KBD=ReadData;
     }
  三行按键对应输出表：
  ![矩阵键盘三行按键法](https://github.com/Ye110ws4ar/STC15/blob/main/threeline.png)   
@@ -625,7 +625,7 @@ void vUartRx_Process()
 	    IIC_SendByte(0x91);
 	    IIC_WaitAck();
 	    adc_val=IIC_RecByte();
-	    IIC_SenAck(1);
+	    IIC_SendAck(1);
 	    IIC_Stop();
 	    return adc_val;
     }
