@@ -466,7 +466,7 @@ void vUartRx_Process()
     void vKBD_Read_ThreeLine()
     {
 	    u8 ReadData=ucKBD_KeyIO_ThreeLine()^0xff;
-	    Trg_KBD=ReadData&(ReadData^ContKBD);
+	    Trg_KBD=ReadData&(ReadData^Cont_KBD);
 	    Cont_KBD=ReadData;
     }
  三行按键对应输出表：
